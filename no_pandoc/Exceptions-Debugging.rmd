@@ -1,0 +1,494 @@
+
+# Exceptions and debugging
+
+<!-- http://www.noamross.net/blog/2013/4/18/r-debug-tools.html -->
+
+This chapter describes techniques to use when things go wrong:
+
+* Debugging: figuring out what went wrong.
+
+* Exceptions: the set of objects that underlies error handling in R.
+
+* Defensive programming: writing 
+
+As with many other parts of R, the approach to dealing with errors and exceptions comes from a LISP-heritage, and is quite different (although some of the terminology is the same) from that of languages like Java.
+
+## Debugging
+
+This section discusses how to debug from the command-line.  Modern R guis, like Rstudio, also provide built in debugging tools. These are built on top of the tools I'll describe below but may be exposed in a more user friendly way that requires less typing.
+
+### Traceback
+
+The key function for performing a post-mortem on an error is `traceback`, which shows all the calls leading up to the error.  Here's an example:
+
+```{r, eval = TRUE}
+f <- function() g()
+g <- function() h()
+h <- function() i()
+i <- function() "a" + 1
+f()
+# Error in "a" + 1 : non-numeric argument to binary operator
+traceback()
+# 4: i() at #1
+# 3: h() at #1
+# 2: g() at #1
+# 1: f()
+```
+
+This is very helpful to determine exactly where in a stack of calls an error occured.  However, it's not so helpful if you have a recursive function, or other situations where the same function is called in multiple places:
+
+```{r, eval = FALSE}
+j <- function(i = 5) {
+  if (i == 1) "a" + 1
+  j(i - 1)
+}
+j()
+# Error in "a" + 1 : non-numeric argument to binary operator
+traceback()
+# 5: j(i - 1) at #3
+# 4: j(i - 1) at #3
+# 3: j(i - 1) at #3
+# 2: j(i - 1) at #3
+# 1: j()
+```
+
+### Browser
+
+Trackback can help you figure out where the error occurred, but to understand why the error occured and to fix it, it's often easier to explore interactively.  `browser()` allows you to do this by pausing execution and returning you to an interactive state. Here you can run any regular R command, as well as some extra single letter commands:
+
+* `c`: leave interactive debugging and continue execution
+
+* `n`: execute the next step. Be careful if you have a variable named `n`: to
+  print it you'll need to be explicit `print(n)`.
+
+* `\n`: the default behaviour is the same as `c`, but this is somewhat
+  dangerous as it makes it very easy to accidentally continue during
+  debugging. I recommend `options(browserNLdisabled = TRUE)` so that a new
+  line is simply ignored.
+
+* `Q`: stops debugging, terminate the function and return to the global
+  workspace
+
+* `where`: prints stack trace of active calls (the interactive equivalent of
+  `traceback`)
+
+Don't forget that you can combine `if` statements with `browser()` to only debug when a certain situation occurs.
+
+### Browsing arbitrary R code
+
+As well as adding `browser()` yourself, there are two functions that will added it to code:
+
+* `debug()` inserts a browser statement in the first line of the specified
+  function. `undebug` will remove it, or you can use `debugonce` to insert a
+  browser call for the next run, and have it automatically removed afterwards.
+
+* `utils::setBreakpoint()` does the same thing, but instead inserts `browser()`
+  in the function corresponding to the specified file name and line number.
+
+These two functions are both special cases of `trace()`, which allows you to insert arbitrary code in any position in an existing function. The complement of `trace()` is `untrace()`. You can only perform one trace per function - subsequent traces will replace prior.
+
+Locating warnings is a little trickier. The easiest way to turn it in an error with `options(warn = 2)` and then use the standard functions described above. Turn back to default behaviour with `options(warn = 0)`.
+
+### Browsing on error
+
+It's also possible to  start `browser` automatically when an error occurs, by setting `options(error = browser)`. This will start the interactive debugger in the environment in which the error occurred. Other functions that you can supply to `error` are:
+
+* `recover`: a step up from `browser`, as it allows you to drill down into any
+  of the calls in the call stack. This is useful because often the cause of
+  the error is a number of calls back - you're just seeing the consequences.
+  This is the result of "fail-slow" code
+
+* `dump.frames`: an equivalent to `recover` for non-interactive code. Will
+  save an `rdata` file containing the nested environments where the error
+  occurred. This allows you to later use `debugger` to re-create the error as
+  if you had called `recover` from where the error occurred
+
+    ```{r, eval = FALSE}
+    # Saves debugging info to file last.dump.rda
+    options(error = quote({dump.frames(to.file = TRUE); q()}))
+
+    # Then in an interactive R session:
+    print(load("last.dump.rda"))
+    debugger("last.dump")
+    ```
+
+* `NULL`: the default. Prints an error message and stops function execution.
+  Use this to reset back to the regular behaviour.
+
+Warnings are harder to track down because they don't provide any information about where they occured. Currently, the best way to debug them into turn them into errors using `options(warn = 2)`: then you can apply any of the techniques described above. 
+
+## Exceptions
+
+The fine details of exceptions are not particularly well documented in R. If you want to learn more about the internals, I recommend the following two primary sources:
+
+* [A prototype of a condition system for R](http://homepage.stat.uiowa.edu/~luke/R/exceptions/simpcond.html) by Robert Gentleman and Luke Tierney. This is describes an early version of R's condition system. The implementation changed somewhat since this was written, but it provides a good overview of how the pieces fit together, and some motivation for the design.
+
+* [Beyond Exception Handling: Conditions and Restarts](http://www.gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html) by Peter Seibel. This describes exception handling in LISP, but the ideas are basically
+the same in R, and it provides some more complicated use cases.
+
+### Creation
+
+You create errors in R with `stop()`.
+
+### Basic error handling
+
+Error handling is performed with the `try()` (simple) and `tryCatch()` (complex) functions. `try()` allows execution to continue even after an exception has occured. For example, normally if you run a function that throws an error, it terminates immediately and doesn't return a value:
+
+```{r}
+f1 <- function(x) {
+  log(x)
+  10
+}
+f1("x")
+```
+
+However, if you wrap the statement that creates the error in `try()`, the error message will still be printed but execution will continue:
+
+```{r}
+f2 <- function(x) {
+  try(log(x))
+  10
+}
+f2()
+```
+
+Note that you pass larger blocks of code to `try()` by wrapping them in `{}`:
+
+```{r}
+try({
+  a <- 1
+  b <- "x"
+  a + b
+})
+a
+b
+```
+
+You can also capture the output of the `try()` function. If succesful, it will be the last result evaluated in the block (just like a function); if unsuccesful it will be an (invisible) object of class "try-error":
+
+```{r}
+success <- try(1 + 2)
+failure <- try("a" + "b")
+str(success)
+str(failure)
+```
+
+You can use the second argument to `try()`, `silent`, to suppress the printing of the error message.
+
+`try()` is particularly useful when you're applying a function to multiple elements in a list:
+
+```{r}
+elements <- list(1:10, c(-1, 10), c(T, F), letters)
+results <- lapply(elements, log)
+results <- lapply(elements, function(x) try(log(x)))
+```
+
+There isn't a built-in function for testing for this class, so we'll define one. Then you can easily find the locations of errors with `sapply()` (learn more about it in the functionals chapter), and extract the successes or look at the inputs that lead to failures.
+
+```{r}
+is.error <- function(x) inherits(x, "try-error")
+succeeded <- !sapply(results, is.error)
+
+# look at successful results
+str(results[succeeded])
+
+# look at inputs that failed
+str(elements[!succeeded])
+```
+
+Another useful `try()` idiom is setting a default value if an expression fails. Simply assign the default value outside the try block, and then run the risky code:
+
+```{r, eval = FALSE}
+default <- NULL
+try(default <- read.csv("possibly-bad-input.csv"), silent = TRUE)
+```
+
+### Advanced error handling
+
+`tryCatch` gives more control than `try`, but to understand how it works, we first need to learn a little about conditions, the S3 objects that represent errors, warnings and messages.
+
+```{r}
+is.condition <- function(x) inherits(x, "condition")
+```
+    
+There are three convenience methods for creating errors, warnings and messages.  All take two arguments: the `message` to display, and an optional `call` indicating where the condition was created
+
+```{r}
+e <- simpleError("My error", quote(f(x = 71)))
+w <- simpleWarning("My warning")
+m <- simpleMessage("My message")
+```
+
+There is one class of conditions that can't be generated directly: interrupts, which occur when the user presses Ctrl + Break, Escape, or Ctrl + C (depending on the platform) to terminate execution.
+
+The components of a condition can be extracted with `conditionMessage` and `conditionCall`:
+    
+```{r}
+conditionMessage(e)
+conditionCall(e)
+```
+
+Conditions can be signalled using `signalCondition`. By default, no one is listening, so this doesn't do anything.
+
+```{r}
+signalCondition(e)
+signalCondition(w)
+signalCondition(m)
+```
+
+To listen to signals, we have two tools: `tryCatch()` and `withCallingHandlers()`. `tryCatch()` is an exiting handler: it catches the condition, but the rest of the code after the exception is not run. `withCallingHandlers()` sets up calling handlers: it catches the condition, and then resumes execution of the code.  We will focus first on `tryCatch()`.
+
+The `tryCatch()` call has three arguments:
+
+* `expr`: the code to run.
+
+* `...`: a set of named arguments setting up error handlers. If an error
+  occurs, `tryCatch` will call the first handler whose name matches one of the
+  classes of the condition. The only useful names for built-in conditions are
+  `interrupt`, `error`, `warning` and `message`.
+
+* `finally`: code to run regardless of whether `expr` succeeds or fails. This
+  is useful for clean up, as described below. All handlers have been turned
+  off by the time the `finally` code is run, so errors will propagate as
+  usual.
+
+The following examples illustrate the basic properties of `tryCatch`:
+
+```{r}
+# Handlers are passed a single argument
+tryCatch(stop("error"), 
+  error = function(...) list(...)
+)
+# This argument is the signalled condition, so we'll call
+# it c for short.
+
+# If multiple handlers match, the first is used
+tryCatch(stop("error"), 
+  error = function(c) "a",
+  error = function(c) "b"
+)
+
+# If multiple signals are nested, the the most internal is used first.
+tryCatch(
+  tryCatch(stop("error"), error = function(c) "a"),
+  error = function(c) "b"
+)
+
+# Uncaught signals propagate outwards. 
+tryCatch(
+  tryCatch(stop("error")),
+  error = function(c) "b"
+)
+
+# The first handler that matches a class of the condition is used, 
+# not the "best" match:
+a <- structure(list(message = "my error", call = quote(a)), 
+  class = c("a", "error", "condition"))
+
+tryCatch(stop(a), 
+  error = function(c) "error",
+  a = function(c) "a"
+)
+tryCatch(stop(a), 
+  a = function(c) "a",
+  error = function(c) "error"
+)
+
+# No matter what happens, finally is run:
+tryCatch(stop("error"), 
+  finally = print("Done."))
+tryCatch(a <- 1, 
+  finally = print("Done."))
+  
+# Any errors that occur in the finally block are handled normally
+a <- 1
+tryCatch(a <- 2, 
+  finally = stop("Error!"))
+```
+
+What can handler functions do?
+
+* Return a value.
+
+* Pass the condition along, by re-signalling the error with `stop(c)`, or
+  `signalCondition(c)` for non-error conditions.
+
+* Kill the function completely and return to the top-level with
+  `invokeRestart("abort")`
+
+* Invoke another restart defined by `withRestarts()`. 
+
+
+We can write a simple version of `try` using `tryCatch`. The real version of `try` is considerably more complicated to preserve the usual error behaviour.
+
+```{r}
+try <- function(code, silent = FALSE) {
+  tryCatch(code, error = function(c) {
+    if (!silent) message("Error:", conditionMessage(c))
+    invisible(structure(conditionMessage(c), class = "try-error"))
+  })
+} 
+try(1)
+try(stop("Hi"))
+try(stop("Hi"), silent = TRUE)
+
+rm(try)
+
+withCallingHandlers({
+  a <- 1
+  stop("Error")
+  a <- 2
+}, error = function(c) {})
+```
+
+### Using `tryCatch`
+
+With the basics in place, we'll next develop some useful tools based the ideas we just learned about.  
+
+The `finally` argument to `tryCatch` is particularly useful for clean up, because it is always called, regardless of whether the code executed successfully or not. This is useful when you have:
+
+* modified `options`, `par` or locale
+* opened connections, or created temporary files and directories
+* opened graphics devices
+* changed the working directory
+* modified environment variables
+
+The following function changes the working directory, executes some code, and always resets the working directory back to what it was before, even if the code raises an error.
+
+```{r}
+in_dir <- function(path, code) {
+  cur_dir <- getwd()
+  tryCatch({
+    setwd(path)
+    force(code)
+  }, finally = setwd(cur_dir))
+}
+
+getwd()
+in_dir(R.home(), dir())
+getwd()
+in_dir(R.home(), stop("Error!"))
+getwd()
+```
+
+Another more casual way of cleaning up is the `on.exit` function, which is called when the function terminates.  It's not as fine grained as `tryCatch`, but it's a bit less typing.
+
+```{r}
+in_dir <- function(path, code) {
+  cur_dir <- getwd()
+  on.exit(setwd(cur_dir))
+
+  force(code)
+}
+```
+
+If you're using multiple `on.exit` calls, make sure to set `add = TRUE`, otherwise they will replace the previous call. **Caution**: Unfortunately the default in `on.exit()` is `add = FALSE`, so that every time you run it, it overwrites existing exit expressions.  Because of the way `on.exit()` is implemented, it's not possible to create a variant with `add = TRUE`, so you must be careful when using it.
+
+### Exercises
+
+1. Write a function that opens a graphics device, runs the supplied code, and closes the graphics device (always, regardless of whether or not the plotting code worked).
+
+## Defensive programming
+
+Defensive programming is the art of making code fail in a well-defined manner even when something unexpected occurs. There are two components of this art related to exceptions: raising exceptions as soon as you notice something has gone wrong, and responding to errors as cleanly as possible.
+
+A general principle for errors is to "fail fast" - as soon as you figure out something as wrong, and your inputs are not as expected, you should raise an error. This is more work for you as the function author, but will make it easier for the user to debug because they get errors early on, not after unexpected input has passed through several functions and caused a problem.
+
+There is a tension between interactive analysis and programming. When you a doing an analysis, you want R to do what you mean, and if it guesses wrong, then you'll discover it right away and can fix it. If you're creating a function, then you want to make it as robust as possible so that any problems become apparent right away (see fail fast below).
+
+* Be explicit:
+
+  * Check the types of inputs
+
+  * Be explicit about missings: 
+
+  * Avoid functions that have non-standard evaluation rules (i.e 
+    `subset`, `with`, `transform`). These functions save you time when working
+    interactively, but when they fail inside a function they usually don't
+    return a useful error message.
+
+* Avoid functions that can return different types of objects:
+
+  * Make sure you use preserving subsetting.
+
+  * Don't use `sapply()`: use `vapply()`, or `lapply()` plus the appropriate
+    transformation
+
+### Creating
+
+There are a number of options for letting the user know when something has gone wrong:
+
+* don't use `cat()` or `print()`, except for print methods, or for optional
+  debugging information.
+
+* use `message()` to inform the user about something expected - I often do
+  this when filling in important missing arguments that have a non-trivial
+  computation or impact. Two examples are `reshape2::melt` package, which
+  informs the user what melt and id variables were used if not specified, and
+  `plyr::join`, which informs which variables were used to join the two
+  tables.  You can suppress messages with `suppressMessages`.
+
+* use `warning()` for unexpected problems that aren't show stoppers.
+  `options(warn = 2)` will turn warnings into errors. Warnings are often
+  more appropriate for vectorised functions when a single value in the vector
+  is incorrect, e.g. `log(-1:2)` and `sqrt(-1:2)`.  You can suppress warnings
+  with `suppressWarnings`
+
+* use `stop()` when the problem is so big you can't continue
+
+* `stopifnot()` is a quick and dirty way of checking that pre-conditions for
+  your function are met. The problem with `stopifnot` is that if they aren't
+  met, it will display the test code as an error, not a more informative
+  message. Checking pre-conditions with `stopifnot` is better than nothing,
+  but it's better still to check the condition yourself and return an
+  informative message with `stop()`
+
+
+### An example
+
+The following function is naively written and might cause problems:
+
+```{r}
+col_means <- function(df) {
+  numeric <- sapply(df, is.numeric)
+  numeric_cols <- df[, numeric]
+  
+  data.frame(lapply(numeric_cols, mean))
+}
+```
+
+The ability to come up with a set of potential pathological inputs is a good skill to master. Common cases that I try and check are:
+
+* dimensions of length 0
+* dimensions of length 1 (in case dropping occurs)
+* incorrect input types
+
+The following code exercises some of those cases for `col_means`
+
+```{r}
+col_means(mtcars)
+col_means(mtcars[, 0])
+col_means(mtcars[0, ])
+col_means(mtcars[, "mpg", drop = F])
+col_means(1:10)
+col_means(as.matrix(mtcars))
+col_means(as.list(mtcars))
+
+mtcars2 <- mtcars
+mtcars2[-1] <- lapply(mtcars2[-1], as.character)
+col_means(mtcars2)
+```
+
+A better version of `col_means` might be:
+
+```{r}
+col_means <- function(df) {
+  numeric <- vapply(df, is.numeric, logical(1))
+  numeric_cols <- df[, numeric, drop = FALSE]
+  
+  data.frame(lapply(numeric_cols, mean))
+}
+```
+
+We use `vapply` instead of `sapply`, remember to use `drop = FALSE`.  It still doesn't check that the input is correct, or coerce it to the correct format.
+

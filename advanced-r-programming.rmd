@@ -1,0 +1,41 @@
+```{r child='no_pandoc/Introduction.rmd'}
+```
+```{r child='no_pandoc/Data-structures.rmd'}
+```
+```{r child='no_pandoc/Subsetting.rmd'}
+```
+```{r child='no_pandoc/Vocabulary.rmd'}
+```
+```{r child='no_pandoc/Functions.rmd'}
+```
+```{r child='no_pandoc/OO-essentials.rmd'}
+```
+```{r child='no_pandoc/Environments.rmd'}
+```
+```{r child='no_pandoc/Exceptions-Debugging.rmd'}
+```
+```{r child='no_pandoc/Functional-programming.rmd'}
+```
+```{r child='no_pandoc/Functionals.rmd'}
+```
+```{r child='no_pandoc/Function-operators.rmd'}
+```
+```{r child='no_pandoc/Computing-on-the-language.rmd'}
+```
+```{r child='no_pandoc/Expressions.rmd'}
+```
+```{r child='no_pandoc/Formulas.rmd'}
+```
+```{r child='no_pandoc/Special-environments.rmd'}
+```
+```{r child='no_pandoc/dsl.rmd'}
+```
+```{r child='no_pandoc/Profiling.rmd'}
+```
+```{r child='no_pandoc/Performance.rmd'}
+```
+```{r child='no_pandoc/Rcpp.rmd'}
+```
+```{r child='no_pandoc/C-interface.rmd'}
+```
+
